@@ -637,6 +637,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "why": s.get("why"),
             "expect": s.get("expect") or {},
             "expect_run": s.get("expect_run") or {},
+            "known_issue": s.get("known_issue"),
             "turns": turns,
             # single-turn shape kept for scripts that read runs[].marker
             # (dashboard_verify, refactor_check)
