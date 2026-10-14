@@ -36,11 +36,15 @@
  "path": "logs_block",
  "preset_temporality": null,
  "resolved": {
+  "certificate_file": null,
+  "client_certificate_file": null,
+  "client_key_file": null,
   "display_name": "agenta-entry",
   "endpoint": "https://us.cloud.agenta.ai/api/otlp/v1/traces",
   "headers": {
    "Authorization": "ApiKey <secret>"
   },
+  "insecure": null,
   "log_overrides": {
    "exclude_loggers": [
     "noisy"

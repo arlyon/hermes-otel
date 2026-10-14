@@ -35,9 +35,13 @@
  "path": "logs_block",
  "preset_temporality": null,
  "resolved": {
+  "certificate_file": null,
+  "client_certificate_file": null,
+  "client_key_file": null,
   "display_name": "phoenix-entry",
   "endpoint": "http://localhost:4318/v1/traces",
   "headers": null,
+  "insecure": null,
   "log_overrides": {
    "exclude_loggers": [
     "noisy"

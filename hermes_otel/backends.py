@@ -149,6 +149,10 @@ class _ResolvedBackend:
     # to this backend; ``False`` strips it for this exporter only (#327).
     root_usage: bool = True
     protocol: str = "http/protobuf"
+    insecure: Optional[bool] = None
+    certificate_file: Optional[str] = None
+    client_key_file: Optional[str] = None
+    client_certificate_file: Optional[str] = None
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────
@@ -1556,7 +1560,14 @@ def resolve(bc: BackendConfig) -> _ResolvedBackend:
     root_usage = bc.root_usage if bc.root_usage is not None else spec.root_usage
     if rb.root_usage != root_usage:
         rb = dataclasses.replace(rb, root_usage=root_usage)
-    return dataclasses.replace(rb, protocol=bc.protocol)
+    return dataclasses.replace(
+        rb,
+        protocol=bc.protocol,
+        insecure=bc.insecure,
+        certificate_file=bc.certificate_file,
+        client_key_file=bc.client_key_file,
+        client_certificate_file=bc.client_certificate_file,
+    )
 
 
 # Views over the manifest, kept under their old names for the tests and the

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: "Generic OTLP"
-description: "Send Hermes traces, metrics and logs to an OTLP/HTTP or OTLP/gRPC endpoint."
+description: "Send Hermes traces, metrics and logs to an OTLP/HTTP or OTLP/gRPC endpoint, with optional TLS and mutual TLS."
 ---
 
 # Generic OTLP
@@ -33,23 +33,44 @@ backends:
 
 The `name` is purely for log output ("`[hermes-otel] ✓ my-collector connected`") — it doesn't affect the spans themselves.
 
-## gRPC transport
+## gRPC and TLS
 
-Set `protocol: grpc` on a generic `type: otlp` entry. All three signals use the same gRPC target; `/v1/traces`, `/v1/metrics` and `/v1/logs` are HTTP paths and must not be included.
+Set `protocol: grpc` on a generic `type: otlp` entry. All three signals use the same gRPC target; `/v1/traces`, `/v1/metrics` and `/v1/logs` are HTTP paths and must not be included. `metrics_endpoint` and `logs_endpoint` can override the target for their signals.
 
 ```yaml
+content_capture: off
 backends:
   - type: otlp
-    name: telemetry
+    name: secure-telemetry
     protocol: grpc
-    endpoint: http://localhost:4317
+    endpoint: https://telemetry.example.com:443
+    # Optional private CA; omit to use system roots:
+    certificate_file: ~/certs/telemetry-ca.pem
+    # Optional mTLS identity (both files are required for gRPC):
+    client_certificate_file: ~/certs/hermes-client.pem
+    client_key_file: ~/certs/hermes-client.key
     headers:
       Authorization: Bearer ${TELEMETRY_TOKEN}
 ```
 
-The SDK's existing connection-security defaults and environment settings apply. `http://host:port` selects plaintext by default; HTTPS or a bare target uses TLS by default. `protocol` is selected by YAML, not by `OTEL_EXPORTER_OTLP_PROTOCOL`.
+TLS verifies the server certificate and hostname. `https://host:port` and bare `host:port` targets default to TLS. For an explicitly plaintext local receiver, use `http://localhost:4317` or `insecure: true` with a bare target. `insecure: false` forces TLS even on an `http://` target. `insecure: true` with an HTTPS target, or TLS files on a plaintext connection, is rejected. This setting selects plaintext transport, not TLS with verification disabled.
 
 `protocol: grpc` is supported by the generic `otlp` type; named vendor backends retain their HTTP URL conventions. A single `backends:` list can mix HTTP and gRPC destinations, each with its own independent export queue. Header names are lowercased for gRPC metadata; values and per-backend precedence are unchanged.
+
+The TLS file settings also work with HTTPS/protobuf backends. HTTP additionally accepts a combined client certificate + key PEM in `client_certificate_file` without a separate `client_key_file`. Never put private-key contents in YAML; restrict file permissions on the machine running Hermes. `~` and `${VAR_NAME}` are supported in configured paths.
+
+When a TLS file is not configured on the entry, the corresponding standard SDK environment variable is used:
+
+| Setting | Global environment variable |
+|---|---|
+| `certificate_file` | `OTEL_EXPORTER_OTLP_CERTIFICATE` |
+| `client_certificate_file` | `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` |
+| `client_key_file` | `OTEL_EXPORTER_OTLP_CLIENT_KEY` |
+| `insecure` (gRPC only) | `OTEL_EXPORTER_OTLP_INSECURE` |
+
+Signal-specific variants, such as `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE` and `OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY`, override global variables; explicit per-backend settings override both. `protocol` is selected by YAML, not by `OTEL_EXPORTER_OTLP_PROTOCOL`.
+
+Missing, empty or unreadable files and incomplete gRPC client identities fail that destination's exporter initialization without falling back to plaintext or silently ignoring the CA. Other destinations continue exporting. Certificates are loaded at initialization; restart Hermes after rotating them.
 
 ## Examples
 
@@ -154,4 +175,5 @@ The plugin emits **both** `gen_ai.*` and OpenInference `llm.*` on every span —
 
 **"TLS handshake errors"**
 
-- The plugin uses `opentelemetry-exporter-otlp-proto-http`, which relies on the system cert store. If you're behind a corporate MITM CA, you may need `REQUESTS_CA_BUNDLE` or `SSL_CERT_FILE` pointing at your CA bundle.
+- Set `certificate_file` to the PEM CA bundle that signed the receiver's certificate, or omit it for system trust. For mTLS, configure the client certificate and private key as well.
+- Check the receiver hostname against its certificate and confirm the certificates have not expired. Do not disable verification to work around handshake failures.
