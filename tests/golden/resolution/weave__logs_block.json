@@ -50,6 +50,7 @@
   "metrics_endpoint": null,
   "metrics_headers": null,
   "metrics_temporality": null,
+  "protocol": "http/protobuf",
   "resource_attributes": {
    "wandb.entity": "<secret>",
    "wandb.project": "<secret>"

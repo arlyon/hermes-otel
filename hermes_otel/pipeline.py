@@ -31,6 +31,7 @@ from .instruments import (
     metric_temporality_map,
     metric_views,
 )
+from .otlp_transport import create_exporter, signal_endpoint
 from .plugin_config import content_mode, effective_export_batch_size
 
 try:
@@ -453,7 +454,9 @@ def init_otlp_pipeline(plugin, backends: List[_ResolvedBackend]) -> bool:
             hdrs = plugin._merge_headers(b.headers)
             if b.supports_traces:
                 try:
-                    inner: Any = OTLPSpanExporter(endpoint=b.endpoint, headers=hdrs)
+                    inner: Any = create_exporter(
+                        b, "traces", OTLPSpanExporter, endpoint=b.endpoint, headers=hdrs
+                    )
                     if not b.root_usage:
                         # This backend sums usage over every span (#327).
                         inner = _RootUsageStrippingExporter(inner)
@@ -475,7 +478,7 @@ def init_otlp_pipeline(plugin, backends: List[_ResolvedBackend]) -> bool:
             if b.supports_metrics:
                 # A backend with its own metrics store names the URL (#366);
                 # the rest serve /v1/metrics next to /v1/traces.
-                metrics_endpoint = b.metrics_endpoint or derive_metrics_endpoint(b.endpoint)
+                metrics_endpoint = signal_endpoint(b, "metrics")
                 try:
                     # ``metrics_headers`` set (even empty) means "these, not the
                     # trace headers": GreptimeDB's trace pipeline header must not
@@ -484,7 +487,10 @@ def init_otlp_pipeline(plugin, backends: List[_ResolvedBackend]) -> bool:
                         b.metrics_headers if b.metrics_headers is not None else b.headers
                     )
                     temporality = b.metrics_temporality or config.metrics_temporality
-                    m_exporter = OTLPMetricExporter(
+                    m_exporter = create_exporter(
+                        b,
+                        "metrics",
+                        OTLPMetricExporter,
                         endpoint=metrics_endpoint,
                         headers=metric_hdrs,
                         preferred_temporality=metric_temporality_map(temporality),

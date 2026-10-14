@@ -467,6 +467,12 @@
 #     metrics: true
 #     logs: true       # override default (on for otlp/signoz/lgtm/uptrace/openobserve/parseable/honeycomb)
 
+# Generic OTLP over gRPC:
+#   - type: otlp
+#     name: telemetry
+#     protocol: grpc
+#     endpoint: http://localhost:4317   # no /v1/traces path
+
 # ── LGTM quickstart ──────────────────────────────────────────────────────────
 #
 # Grafana's "all signals in one container" image (traces + metrics + logs).

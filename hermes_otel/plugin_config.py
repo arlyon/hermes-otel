@@ -140,7 +140,7 @@ class BackendConfig:
 
     type: str  # phoenix | langfuse | signoz | jaeger | tempo | otlp | parseable | honeycomb | weave
     name: Optional[str] = None  # display name (defaults to type)
-    endpoint: Optional[str] = None  # OTLP HTTP traces URL
+    endpoint: Optional[str] = None  # HTTP traces URL, or gRPC host:port / origin
     # Where this backend's web UI lives, for the dashboard's Settings tab to
     # link to. Optional: when unset the tab derives it from ``endpoint`` for
     # the types whose UI shares the OTLP origin (Phoenix, Langfuse, ...).
@@ -220,6 +220,7 @@ class BackendConfig:
     # loader never silently drops a query-side setting (#402). Pairs, so the
     # frozen dataclass stays hashable.
     extra: Tuple[Tuple[str, Any], ...] = ()
+    protocol: str = "http/protobuf"  # http/protobuf | grpc (generic otlp backend)
 
 
 @dataclass(frozen=True)

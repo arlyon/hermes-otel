@@ -27,6 +27,7 @@
    "X-P-Stream": "hermes-metrics"
   },
   "metrics_temporality": null,
+  "protocol": "http/protobuf",
   "resource_attributes": null,
   "root_usage": true,
   "supports_logs": true,

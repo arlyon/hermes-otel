@@ -1,14 +1,14 @@
 ---
 sidebar_position: 8
 title: "Generic OTLP"
-description: "Send Hermes traces to any OTLP/HTTP-compatible collector — Honeycomb, New Relic, Datadog's OTLP ingest, your company's central collector, anything."
+description: "Send Hermes traces, metrics and logs to an OTLP/HTTP or OTLP/gRPC endpoint."
 ---
 
 # Generic OTLP
 
-If your backend isn't on the list but it accepts **OTLP over HTTP**, the generic `otlp` type has you covered. Point at an endpoint, set any auth headers, and go.
+If your backend isn't on the list but it accepts **OTLP over HTTP or gRPC**, the generic `otlp` type has you covered. Point at an endpoint, set any auth headers, and go. HTTP/protobuf remains the default; gRPC is opt-in per destination.
 
-**Signals:** depends on the collector (traces always; metrics if supported).
+**Signals:** traces, metrics and logs; turn off any signal your endpoint does not accept.
 
 ## Typical use cases
 
@@ -32,6 +32,24 @@ backends:
 ```
 
 The `name` is purely for log output ("`[hermes-otel] ✓ my-collector connected`") — it doesn't affect the spans themselves.
+
+## gRPC transport
+
+Set `protocol: grpc` on a generic `type: otlp` entry. All three signals use the same gRPC target; `/v1/traces`, `/v1/metrics` and `/v1/logs` are HTTP paths and must not be included.
+
+```yaml
+backends:
+  - type: otlp
+    name: telemetry
+    protocol: grpc
+    endpoint: http://localhost:4317
+    headers:
+      Authorization: Bearer ${TELEMETRY_TOKEN}
+```
+
+The SDK's existing connection-security defaults and environment settings apply. `http://host:port` selects plaintext by default; HTTPS or a bare target uses TLS by default. `protocol` is selected by YAML, not by `OTEL_EXPORTER_OTLP_PROTOCOL`.
+
+`protocol: grpc` is supported by the generic `otlp` type; named vendor backends retain their HTTP URL conventions. A single `backends:` list can mix HTTP and gRPC destinations, each with its own independent export queue. Header names are lowercased for gRPC metadata; values and per-backend precedence are unchanged.
 
 ## Examples
 
