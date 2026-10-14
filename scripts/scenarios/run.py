@@ -193,7 +193,12 @@ class Runner:
 
     # gateway: own gateway process per scenario, so overlays and shutdown are scoped to it.
     def run_gateway(self, s: Dict[str, Any]) -> List[Dict[str, Any]]:
-        gw = Gateway(self.profile, self.out_dir / f"{s['id']}.gateway.log", self.args.gateway_port)
+        gw = Gateway(
+            self.profile,
+            self.out_dir / f"{s['id']}.gateway.log",
+            self.args.gateway_port,
+            self.workdir,
+        )
         if not gw.start(timeout=self.args.gateway_start_timeout):
             return [
                 {
@@ -443,9 +448,10 @@ class Gateway:
     private loopback port and a throwaway key. The profile is standalone
     (setup_profile.py), so a multiplexed host gateway never serves it."""
 
-    def __init__(self, profile: str, log_path: Path, port: int) -> None:
+    def __init__(self, profile: str, log_path: Path, port: int, cwd: Path) -> None:
         self.profile = profile
         self.log_path = log_path
+        self.cwd = cwd
         self.port = free_port(port)
         self.key = secrets.token_hex(24)
         self.proc: Optional[subprocess.Popen] = None
@@ -465,6 +471,7 @@ class Gateway:
         self._log = self.log_path.open("wb")
         self.proc = subprocess.Popen(
             ["hermes", "-p", self.profile, "gateway", "run"],
+            cwd=str(self.cwd),
             stdin=subprocess.DEVNULL,
             stdout=self._log,
             stderr=subprocess.STDOUT,

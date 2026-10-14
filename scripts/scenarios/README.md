@@ -132,12 +132,12 @@ a scenario's expectations fail if the hook stops producing its telemetry;
 | `pre_api_request` / `post_api_request` | every scenario | asserted: `api.*` spans (`llm_calls_min`), content modes (`content-*`) |
 | `api_request_error` | `api-error-fatal` | asserted: root status `error` |
 | `pre_tool_call` / `post_tool_call` | `shell-echo` and every tool scenario | asserted: `tool.*` spans, names, call ids, outcomes |
-| `transform_terminal_output` | every terminal scenario | fires |
-| `transform_llm_output` | every scenario | fires |
+| `transform_terminal_output` | every terminal scenario | asserted in `shell-echo`: `hermes.terminal.output.chars` on the tool span |
+| `transform_llm_output` | every scenario | asserted in `shell-echo`: `hermes.llm.output.chars` on the root |
 | `pre_auxiliary_call` / `post_auxiliary_call` | every first turn (title generation); `moa-turn` | asserted in `moa-turn` (`hermes.auxiliary.task`) |
 | `subagent_start` / `subagent_stop` | `delegate-one`, `delegation-*` | asserted: `subagent.*` span, rejoined child root, depth |
 | `pre_approval_request` / `post_approval_response` | `approval-granted`, `-denied`, `-timeout` | asserted: `approval.*` span, `hermes.approval.choice` / `timed_out` |
-| `on_skill_lifecycle` | `skill-load` | fires (the `skill.*` span asserted comes from the tool hooks) |
+| `on_skill_lifecycle` | none asserted | only a metric (`skill_lifecycle_count`) when a skill is created, patched or used; the `skill.*` span `skill-load` asserts comes from the tool hooks |
 | `kanban_task_claimed`, `kanban_task_completed`, `on_kanban_worker_spawned`, `on_kanban_worker_exited`, `on_kanban_dispatch_tick`, `on_kanban_task_updated` | `kanban-two-profiles` | asserted: `kanban.*` spans, one trace per run, two profiles |
 | `kanban_task_blocked`, `on_kanban_worker_stale_claim` | none here | covered by `scripts/kanban_demo` (block, crash, runaway cards) |
 | `agent_loop_stopped` | none | not covered: needs `/stop` on a running gateway turn |

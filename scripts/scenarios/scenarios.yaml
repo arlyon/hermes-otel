@@ -39,6 +39,8 @@ scenarios:
       tools_min: 1
       tool_names_any: [terminal]
       output_contains: "{marker}-out"
+      # transform_terminal_output / transform_llm_output leave these behind
+      span_attrs_any: {hermes.terminal.output.chars: "", hermes.llm.output.chars: ""}
       logs_min: 3
       log_levels_any: [INFO]
 
@@ -250,9 +252,9 @@ scenarios:
   - id: approval-granted
     mode: gateway
     suite: full
-    why: a dangerous command waits for approval, answered "once" over /v1/runs/{id}/approval; approval.* span with the choice, the tool runs
+    why: a command Hermes gates (a recursive rm of a name that does not exist, run in the scratch workdir) waits for approval, answered "once" over /v1/runs/{id}/approval; approval.* span with the choice, the tool runs
     approval: once
-    prompt: "Run exactly this shell command in the terminal, as-is, and reply with its output: rm -rf /tmp/hermes-scenarios-{token}-g && echo {marker}-granted"
+    prompt: "Run exactly this shell command in the terminal, as-is, and reply with its output: rm -r scenario-scratch-{token}-g; echo {marker}-granted"
     expect:
       status: ok
       span_names_any: [approval.]
@@ -263,7 +265,7 @@ scenarios:
     suite: full
     why: the same request answered "deny"; the approval span says so and the tool is blocked, the turn still ends ok
     approval: deny
-    prompt: "Run exactly this shell command in the terminal, as-is, and reply with its output: rm -rf /tmp/hermes-scenarios-{token}-d && echo {marker}-denied. If it is not allowed, reply with the text {marker}-refused."
+    prompt: "Run exactly this shell command in the terminal, as-is, and reply with its output: rm -r scenario-scratch-{token}-d; echo {marker}-denied. If it is not allowed, reply with the text {marker}-refused."
     expect:
       status: ok
       span_names_any: [approval.]
@@ -274,7 +276,7 @@ scenarios:
     suite: full
     why: the request is left unanswered until approvals.timeout (20 s in the harness profile); the approval span records the timeout
     approval: timeout
-    prompt: "Run exactly this shell command in the terminal, as-is, and reply with its output: rm -rf /tmp/hermes-scenarios-{token}-t && echo {marker}-late. If it is not allowed, reply with the text {marker}-refused."
+    prompt: "Run exactly this shell command in the terminal, as-is, and reply with its output: rm -r scenario-scratch-{token}-t; echo {marker}-late. If it is not allowed, reply with the text {marker}-refused."
     expect:
       status: ok
       span_names_any: [approval.]

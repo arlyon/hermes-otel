@@ -87,7 +87,7 @@ Add an entry to `scripts/scenarios/scenarios.yaml`:
   suite: full
   why: the request answered "deny"; the approval span says so and the tool is blocked
   approval: deny
-  prompt: "Run exactly this shell command in the terminal, as-is: rm -rf /tmp/x-{token} && echo {marker}-denied"
+  prompt: "Run exactly this shell command in the terminal, as-is: rm -r scenario-scratch-{token}; echo {marker}-denied"
   expect:
     status: ok
     span_names_any: [approval.]
