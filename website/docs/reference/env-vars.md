@@ -168,6 +168,8 @@ Every scalar field of the config file can be overridden by `HERMES_OTEL_<FIELD>`
 | `HERMES_OTEL_METRICS_HISTOGRAM` | `metrics_histogram` | string | `"explicit"` |
 | `HERMES_OTEL_METRICS_LABEL_LIMIT` | `metrics_label_limit` | int | `100` |
 | `HERMES_OTEL_SKILL_SPANS` | `skill_spans` | bool | `true` |
+| `HERMES_OTEL_REMOTE_PARENT` | `remote_parent` | bool | `true` |
+| `HERMES_OTEL_PROBE_BACKENDS` | `probe_backends` | bool | `true` |
 | `HERMES_OTEL_DISCOVERY_PROMPT` | `discovery_prompt` | bool | `false` |
 | `HERMES_OTEL_DASHBOARD_LIVE` | `dashboard_live` | bool | `true` |
 | `HERMES_OTEL_DASHBOARD_LIVE_MAX_SPANS` | `dashboard_live_max_spans` | int | `1000` |
@@ -178,6 +180,13 @@ Every scalar field of the config file can be overridden by `HERMES_OTEL_<FIELD>`
 | `HERMES_OTEL_SUPPRESS_MCP_PING_SPANS` | `suppress_mcp_ping_spans` | bool | `true` |
 
 [//]: # (generated:env-overrides:end)
+
+## Join an outer trace
+
+| Var | Effect |
+|---|---|
+| `HERMES_OTEL_TRACEPARENT` | A W3C `traceparent` (`00-<trace id>-<span id>-<flags>`) exported by whatever launched Hermes (a CI job, a script, another agent). Every turn root of the process is parented under that span, so the Hermes run shows up inside the launcher's trace, with `hermes.trace.remote_parent=true` on the root. A malformed value is reported once and ignored. `remote_parent: false` turns this off. The kanban worker hand-off uses plain `TRACEPARENT` and only inside a worker; the two do not interact (#474) |
+| `HERMES_OTEL_TRACESTATE` | A W3C `tracestate` carried along with the parent above |
 
 ## Paths
 
@@ -191,6 +200,7 @@ Every scalar field of the config file can be overridden by `HERMES_OTEL_<FIELD>`
 
 | Var | Effect |
 |---|---|
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_METRICS_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS` | **Ignored** since 1.30.1 (#472). The SDK adds them to every exporter built without headers, so a token exported for another tool reached every credential-less backend in a multi-backend file. Put headers in the file instead: top-level `headers:` for all backends, a backend entry's `headers:` for one |
 | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | Metric temporality (`cumulative` / `delta`) for a backend when neither its entry, its type preset nor the top-level `metrics_temporality` sets one; read by the OTLP exporter itself and shown on the Settings tab |
 
 ## Debug

@@ -21,6 +21,7 @@ A test (`tests/unit/test_span_attributes_docs.py`) fails if the code sets an att
 | `service.instance.id` | UUID generated once per process — keeps two Hermes processes on different metric series |
 | `service.version` | Plugin version, read from the shipped `plugin.yaml` |
 | `process.pid` | Process id |
+| `os.type`, `host.arch` | The operating system (`darwin`, `linux`, `windows`) and CPU architecture (`arm64`, `amd64`, `x86` …) in the OTel spellings, so a fleet can be split by platform (#476) |
 | `openinference.project.name` | `project_name` / `OTEL_PROJECT_NAME` (the Phoenix project); optional |
 | `hermes.kanban.task_id`, `hermes.kanban.board`, `hermes.kanban.run_id` | The kanban card, its board and the attempt a dispatcher-spawned worker is running, from `HERMES_KANBAN_TASK` / `_BOARD` / `_RUN_ID`. Only when the task is set: Hermes pins the board into every chat's environment, so the board alone never marks a worker |
 | `host.name` | Hostname, only when `host_metrics: true` |
@@ -34,10 +35,11 @@ A test (`tests/unit/test_span_attributes_docs.py`) fails if the code sets an att
 |---|---|---|
 | `openinference.span.kind` | OpenInference | `AGENT` (root, subagent) · `LLM` (`llm.*`, `api.*`) · `TOOL` (`tool.*`) · `GENERAL` (skill, approval, kanban) |
 | `traceloop.span.kind` | Traceloop | The same span kinds in Traceloop's lowercase vocabulary: `agent` (root, subagent) · `tool` (`tool.*`) · `task` (everything else; Traceloop has no LLM kind, model spans are identified by `gen_ai.*`) · `unknown`. Filter on this from openllmetry-aware tools such as `opentelemetry-mcp` (since 1.26.0; earlier releases wrote the OpenInference spelling here, #382) |
-| `hermes.turn.number` | hermes | 1-based index of the user prompt within the session (per process; `hermes -r` restarts at 1). On the root and on every `llm.*` / `api.*` / `tool.*` span of the turn |
+| `hermes.turn.number` | hermes | 1-based index of the user prompt within the session. A session resumed in a new process (`hermes -r`) continues from the user prompts in its conversation; after a context compaction the count can only stay or grow. On the root and on every `llm.*` / `api.*` / `tool.*` span of the turn |
 | `session.id`, `session_id` | OTel / hermes | Hermes session id, on the root and on `llm.*` / `api.*` / `tool.*` / `subagent.*`; `session_id` is the plugin's oldest spelling of the same value, kept for dashboards built on it |
 | `gen_ai.conversation.id` | gen_ai | Same id, gen_ai spelling, wherever `gen_ai.operation.name` is set |
 | `correlation.id` | hermes | A correlation id the host passed on the hook (`correlation_id` / `correlation.id` / `x-correlation-id` …), reused on every span of that session. Hermes 0.21 passes none, so the attribute is absent; group by `session.id` instead |
+| `hermes.span.ended_by`, `hermes.span.sweep_reason` | hermes | On a child span (`tool.*` / `api.*` / `llm.*` / `approval.*` / `skill.*`) the plugin ended on the operation's behalf because the operation's own end hook never came: `ended_by` is `sweep` and `sweep_reason` says why, `turn_end` (still open at `on_session_end`) · `session_end` (at finalize / reset) · `turn_failed` (every API attempt of the turn failed and the next turn closed it) · `ttl` (the [orphan sweep](/architecture/orphan-sweep), `root_span_ttl_ms`) · `shutdown`. Absent on a normally ended span (#477) |
 | `user.id`, `hermes.sender.id` | OTel / hermes | Gateway sender identity — only with `capture_sender_id: true`. `user.id` is `platform:sender` |
 
 ## `agent` / `cron` (turn root)
@@ -52,7 +54,8 @@ The root span is named `agent`, or `cron` when the session kind is a cron job. S
 | `hermes.platform` | hermes | string | The Hermes surface the turn ran on: `cli` · `telegram` · `discord` · `cron` · … (never reported as a provider) |
 | `hermes.profile` | hermes | string | The Hermes profile that ran the turn: `default`, the profile id under `~/.hermes/profiles/`, or `custom`. Also a resource attribute and the `profile` label on every metric ([profiles](/configuration/profiles)) |
 | `hermes.llm.output.chars` | hermes | int | Size of the turn's final response text, observed on `transform_llm_output` ([hooks](/reference/hooks#transform_llm_output)); absent when the finalizer did not run (optional) |
-| `llm.provider`, `gen_ai.provider.name`, `gen_ai.system` | both | string | The LLM provider the turn's API calls reported (`openrouter`, `anthropic` …), set at **end**; absent when no API call reported one. Hermes 0.21 passes no provider on `on_session_start` |
+| `llm.provider`, `gen_ai.provider.name`, `gen_ai.system` | both | string | The LLM provider the turn's API calls reported, set at **end**; absent when no API call reported one. Hermes 0.21 passes no provider on `on_session_start`. Each carries its convention's well-known spelling when there is one for the Hermes id (`gen_ai.*`: `x_ai`, `aws.bedrock`, `gcp.vertex_ai`, `gcp.gemini`, `azure.ai.inference`, `openai` for `openai-api` / `openai-codex`; `llm.provider`: `xai`, `aws`, `google`, `azure`, `moonshot`, `minimax`), else the raw id (`openrouter`, `nvidia`, `custom` …) (#475) |
+| `hermes.provider` | hermes | string | The provider id exactly as Hermes names it (`xai`, `bedrock`, `openai-api`, `openrouter` …), beside the convention spellings above; wherever those are set |
 | `gen_ai.request.model` | gen_ai | string | Model name |
 | `hermes.human_input.kind`, `hermes.human_input.prompt`, `hermes.human_input.outcome`, `hermes.human_input.wait_s` | hermes | mixed | On a `human_input.{kind}` span (`clarify`, a password prompt; not approvals): what the person was asked (Hermes redacts it; a preview under `content_capture`), how the wait ended and how long it took |
 | `hermes.turn.stop_reason` | hermes | string | Set when `agent_loop_stopped` fires for the turn (`/stop`, the `/new` fast path); a stopped turn whose end never arrives is swept as `interrupted`, not `timed_out` |
@@ -63,12 +66,13 @@ The root span is named `agent`, or `cron` when the session kind is a cron job. S
 | `gen_ai.agent.name` | gen_ai | string | The host's `agent_name` when it passes one, else the active named profile (`coder`), else `hermes-agent`; Weave shows it as the agent |
 | `wandb.is_turn`, `wandb.thread_id` | Weave | bool / string | Marks a Weave conversation turn and groups turns by session |
 | `weave.agent.version` | Weave | string | Plugin version (optional) |
+| `hermes.trace.remote_parent` | hermes | bool | `true` when the root was parented under the span an outer process named in `HERMES_OTEL_TRACEPARENT` ([env vars](/reference/env-vars#join-an-outer-trace), #474); absent otherwise |
 | `hermes.session.synthesized` | hermes | bool | `true` on continuation turns: Hermes fires `on_session_start` only for a session's first turn, so later turns open their root lazily at the first hook of the turn (optional) |
 | `hermes.session.previous_id` | hermes | string | The session this one replaced (`/new`, `/reset`); the root also carries a span link (`hermes.link=previous_session`) to that session's last root (optional) |
 | `hermes.session.finalize_reason`, `hermes.session.reset_reason` | hermes | string | Set when a still-open root was closed by `on_session_finalize` / `on_session_reset`, with `hermes.turn.final_status` `finalized` / `reset` (optional) |
 | `hermes.link` | hermes | string | On the span **link** from a replacing session's first root to the old session's last root: `previous_session` |
 | `hermes.session_id`, `hermes.session.turn_count`, `hermes.session.duration_s`, `hermes.session.finalize_reason` / `hermes.session.reset_reason` | hermes | mixed | On the **log record** `on_session_finalize` / `on_session_reset` emit (exported with `capture_logs`), not on a span |
-| `hermes.cron.job_id` | hermes | string | Cron job id, `cron` roots only (optional) |
+| `hermes.cron.job_id` | hermes | string | Cron job id, `cron` roots only: from the hook payload, else parsed from the scheduler's `cron_<job id>_<timestamp>` session id (optional) |
 | `hermes.session.is_subagent` | hermes | bool | `true` on a delegated child's own root (optional) |
 | `hermes.subagent.role`, `hermes.subagent.parent_session_id` | hermes | string | On a delegated child's root (optional) |
 
@@ -77,7 +81,7 @@ Set at **end** (turn summary; empty/zero aggregators are omitted):
 | Attribute | Type | Meaning |
 |---|---|---|
 | `hermes.session.completed`, `hermes.session.interrupted` | bool | Hook payload flags |
-| `hermes.turn.final_status` | hermes | string | `completed` · `interrupted` · `failed` · `incomplete` · `timed_out` — from Hermes' `completed` / `interrupted` / `failed` flags (`timed_out` from the orphan sweep) |
+| `hermes.turn.final_status` | hermes | string | `completed` · `interrupted` · `failed` · `incomplete` · `timed_out` · `finalized` · `reset` — from Hermes' `completed` / `interrupted` / `failed` flags (`timed_out` from the orphan sweep; `finalized` / `reset` when a session boundary closed the root; `failed` also when the turn's last API attempt failed and Hermes never ended it, #467) |
 | `hermes.session.failed` | hermes | bool | Hermes' `failed` flag on `on_session_end` |
 | `hermes.turn.exit_reason` | hermes | string | Hermes' `turn_exit_reason` (`interrupted_by_user`, `guardrail_halt`, `context_compression_timeout`, `max_iterations_reached(n/m)` …), when reported |
 | `hermes.turn.tool_count`, `hermes.turn.tools` | int / string | Distinct tool names (sorted CSV, ≤500 chars) |
@@ -102,7 +106,7 @@ One per `run_conversation` call (span kind `LLM`).
 | Attribute | Convention | Type | Meaning |
 |---|---|---|---|
 | `llm.model_name` | OpenInference | string | Model |
-| `llm.provider`, `gen_ai.provider.name`, `gen_ai.system` | both | string | The LLM provider reported by this turn's API calls; absent on the first call before any API request reported one |
+| `llm.provider`, `gen_ai.provider.name`, `gen_ai.system` | both | string | The LLM provider reported by this turn's API calls, in each convention's spelling (see the turn root); absent on the first call before any API request reported one |
 | `gen_ai.request.model` | gen_ai | string | Model name |
 | `gen_ai.operation.name` | gen_ai | string | `chat` |
 | `input.value`, `input.mime_type` | OpenInference | string | User message (`text/plain`) or, with `capture_conversation_history`, the conversation JSON (`application/json`) |
@@ -120,7 +124,7 @@ One per HTTP round-trip to the provider (span kind `LLM`). Set at **start**:
 | Attribute | Convention | Type | Meaning |
 |---|---|---|---|
 | `llm.model_name`, `llm.provider` | OpenInference | string | Model / provider |
-| `gen_ai.request.model`, `gen_ai.system`, `gen_ai.provider.name` | gen_ai | string | Model / provider (`gen_ai.system` is the legacy spelling Langfuse reads) |
+| `gen_ai.request.model`, `gen_ai.system`, `gen_ai.provider.name` | gen_ai | string | Model / provider (`gen_ai.system` is the legacy spelling Langfuse reads); the provider in the GenAI well-known spelling when there is one, else the Hermes id, which `hermes.provider` always carries (#475) |
 | `gen_ai.operation.name` | gen_ai | string | `chat` |
 | `hermes.query_source` | hermes | string | Which loop the call belongs to: `main` (the agent loop), `subagent` (a delegated child's own loop), `auxiliary` (a call Hermes made on the agent's behalf: titling, compression, MoA reference models and aggregator, vision, approval, the kanban decomposer, the `/goal` judge, …; [hooks](/reference/hooks#pre_auxiliary_call--post_auxiliary_call)) |
 | `hermes.auxiliary.task` | hermes | string | The auxiliary task, as Hermes names it (`title_generation`, `compression`, `moa_reference`, `moa_aggregator`, `vision`, `approval`, `kanban_decomposer`, `triage_specifier`, `goal_judge`, …); `unknown` when it sent none. Auxiliary spans only |

@@ -32,6 +32,8 @@ Any root older than `root_span_ttl_ms` (default: 10 minutes) gets:
 2. `StatusCode.OK` (not `ERROR` — timeouts shouldn't pollute error dashboards)
 3. `span.end()` called, which enqueues it for export
 
+The exception is a turn whose last API attempt failed (`api_request_error` with no success after it): Hermes ends that turn without `on_session_end`, so the sweep closes it as `final_status = "failed"` with `StatusCode.ERROR` and the attempt's `error.type` (#467).
+
 Delegation spans (`subagent.*`) are the exception: they are not part of the turn and the turn sweep leaves them open, because Hermes delivers background delegations' results turns later. They have their own TTL, `subagent_span_ttl_ms` (default 24 hours), after which a delegation whose `subagent_stop` never arrived is ended with `hermes.subagent.swept=true` and `StatusCode.OK`.
 
 Finalizing a session also drops everything the plugin buffered for it: its parent stack, open skill spans, delegation record and the per-session aggregator (token totals, previews, turn summary), so a crashed turn cannot pin memory for the life of a gateway process. The sweep never touches the parent stack of the session that happened to trigger it.
@@ -53,6 +55,17 @@ export HERMES_OTEL_ROOT_SPAN_TTL_MS=300000   # 5 minutes
 
 Pick a TTL longer than your longest reasonable turn. A cron job that walks a large codebase might legitimately take 20+ minutes; set the TTL to ~1 hour if your agents have long-running turns.
 
+## Children the turn left open (#477)
+
+A root's children can outlive their own end hook: a tool whose `post_tool_call` never fires (the turn was interrupted mid-tool), an `api.*` span cut by a stream abort, an approval that timed out. Until 1.30.1 such a span stayed open past `on_session_end`, was never exported until the process shut down, and then carried no trace of what had happened. Now every path that closes a root first ends the children still open under it, before the root so the root still contains them, with `StatusCode.OK` (the sweep is not an error of the operation) and two attributes:
+
+| Attribute | Value |
+|---|---|
+| `hermes.span.ended_by` | `sweep` |
+| `hermes.span.sweep_reason` | `turn_end` (open at `on_session_end`) · `session_end` (open at finalize / reset) · `turn_failed` (every API attempt of the turn failed and the next turn closed it, #467) · `ttl` (this page's orphan sweep) · `shutdown` (the `atexit` handler) |
+
+Each swept span adds one to `hermes.span.swept.count` (labels `span_kind` = the key prefix, `tool` / `api` / `llm` / `approval` / `skill`, and `reason`), so a fleet dashboard can alert when turns start leaving work behind. A span that ended normally carries neither attribute. Delegation spans (`subagent.*`) are not children of the turn for this purpose; see below.
+
 ## What it's NOT
 
 - **Not a liveness check.** The sweep only triggers when another turn fires a hook. If Hermes is completely idle, a stale span stays open until the next user interaction wakes the sweeper.
@@ -63,14 +76,14 @@ Pick a TTL longer than your longest reasonable turn. A cron job that walks a lar
 
 On graceful shutdown (SIGTERM, `hermes gateway stop`), the `atexit` handler:
 
-1. Calls `SpanTracker.end_all()` — finalizes any still-open roots with `final_status=incomplete`.
+1. Calls `SpanTracker.end_all()` — ends every still-open span, each marked `hermes.span.ended_by=sweep`, `hermes.span.sweep_reason=shutdown`.
 2. Calls `force_flush()` on every `BatchSpanProcessor` so buffered spans get exported.
 
 The orphan sweep isn't involved in graceful shutdown — it only runs on the hook hot path.
 
 ## Seeing it in action
 
-The simplest way to verify: start Hermes, begin a turn that does nothing (just sits at a prompt), hard-kill the process, restart Hermes, start a new turn. A few seconds after the new turn's first hook fires, check the backend UI — you should see the previous orphan showing up as `completed`... wait, let me correct that — as `timed_out` with a ~TTL-ish duration.
+The simplest way to verify: start Hermes, begin a turn that does nothing (just sits at a prompt), hard-kill the process, restart Hermes, start a new turn. A few seconds after the new turn's first hook fires, check the backend UI — you should see the previous orphan showing up as `timed_out` with a ~TTL-ish duration.
 
 If it's showing up as indefinitely open, either:
 

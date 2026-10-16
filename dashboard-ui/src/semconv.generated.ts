@@ -228,6 +228,8 @@ export const KIND_EXAMPLES: readonly { name: string; attrs: Record<string, strin
 ];
 export const ATTRIBUTE_NAMES: readonly string[] = [
   "host.name",
+  "host.arch",
+  "os.type",
   "openinference.project.name",
   "process.pid",
   "service.instance.id",
@@ -258,6 +260,9 @@ export const ATTRIBUTE_NAMES: readonly string[] = [
   "hermes.session.kind",
   "hermes.session.previous_id",
   "hermes.session.reset_reason",
+  "hermes.span.ended_by",
+  "hermes.span.sweep_reason",
+  "hermes.trace.remote_parent",
   "hermes.session.synthesized",
   "hermes.session.turn_count",
   "hermes.session_id",
@@ -409,6 +414,7 @@ export const ATTRIBUTE_NAMES: readonly string[] = [
   "hermes.log.attribution",
   "gen_ai.agent.name",
   "gen_ai.operation.name",
+  "hermes.provider",
   "gen_ai.provider.name",
   "gen_ai.request.choice.count",
   "gen_ai.request.frequency_penalty",

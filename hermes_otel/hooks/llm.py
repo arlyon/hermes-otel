@@ -9,6 +9,7 @@ from .. import log_events as EV
 from ..debug_utils import debug_log
 from ..helpers import (
     coerce_bool,
+    count_user_turns,
     http_status_class,
     query_source_for,
     serialize_full,
@@ -84,6 +85,11 @@ def on_pre_llm_call(
 
     tracer.sweep_expired_turns()
 
+    # The previous turn failed on every API attempt and never ended (#467):
+    # close it so this turn gets its own root instead of joining that trace.
+    if session_id:
+        tracer.close_failed_turn(session_id)
+
     # hermes fires on_session_start only on the very first turn, but
     # on_session_end fires per turn. On continuation turns (2+) we arrive
     # here with no active session span → llm.* would become the trace
@@ -96,7 +102,11 @@ def on_pre_llm_call(
     # One pre_llm_call per user prompt (Hermes fires it before the tool loop),
     # so this is where the turn gets its number. Tool and api spans opened
     # later in the turn pick it up via _turn_attributes.
-    turn_number = tracer.sessions.next_turn(session_id, reset=bool(is_first_turn))
+    turn_number = tracer.sessions.next_turn(
+        session_id,
+        reset=bool(is_first_turn),
+        history_turns=count_user_turns(conversation_history),
+    )
     if session_id:
         _emit_event(
             tracer,
@@ -380,6 +390,11 @@ def on_post_api_request(
         model_labels=model_labels,
         cache_labels={**model_labels, "api_mode": api_mode},
     )
+    if session_id:
+        # A success after a failed attempt (a retry that worked) clears #467's flag.
+        ps = tracer.sessions.peek(session_id)
+        if ps is not None:
+            ps.last_api_failed = False
     if totals is not None and session_id:
         ps = tracer.sessions.get_or_create(session_id)
         for field in _USAGE_FIELDS:
@@ -503,10 +518,12 @@ def on_api_request_error(
     attributes.update(correlation_attributes(tracer, session_id, kwargs))
 
     # Remember why this turn failed so on_session_end can surface it on the root.
-    if session_id and error_type:
+    if session_id:
         ps = tracer.sessions.peek(session_id)
         if ps is not None:
-            ps.last_error_type = error_type
+            ps.last_api_failed = True
+            if error_type:
+                ps.last_error_type = error_type
 
     _emit_event(
         tracer,

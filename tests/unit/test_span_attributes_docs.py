@@ -9,10 +9,12 @@ CODE = sorted((REPO_ROOT / "hermes_otel" / "hooks").glob("*.py")) + [
     REPO_ROOT / "hermes_otel" / "pipeline.py",
     # Per-session roll-ups the root span carries (cost, auxiliary calls).
     REPO_ROOT / "hermes_otel" / "session_state.py",
+    # The sweep marker on children ended on the operation's behalf (#477).
+    REPO_ROOT / "hermes_otel" / "span_tracker.py",
 ]
 DOC = REPO_ROOT / "website" / "docs" / "reference" / "span-attributes.md"
 
-_NAME = r"(?:gen_ai|llm|hermes|openinference|session|user|error|input|output|tool|correlation|http|service|process|wandb|weave|exception|host)\.[a-z_][a-z0-9_.]*"
+_NAME = r"(?:gen_ai|llm|hermes|openinference|session|user|error|input|output|tool|correlation|http|service|process|wandb|weave|exception|host|os)\.[a-z_][a-z0-9_.]*"
 _QUOTED = re.compile(r'"(' + _NAME + r')"')
 _TICKED = re.compile(r"`(" + _NAME + r")`")
 # Documented in prose (wildcards), not as literals.

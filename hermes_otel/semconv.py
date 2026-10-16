@@ -55,6 +55,18 @@ ATTRIBUTES: Tuple[Attr, ...] = (
         "Resource (on every span)",
     ),
     Attr(
+        "host.arch",
+        "resource",
+        "CPU architecture in the OTel spelling (`arm64`, `amd64`, `x86` …), from `platform.machine()` (#476)",
+        "Resource (on every span)",
+    ),
+    Attr(
+        "os.type",
+        "resource",
+        "Operating system in the OTel spelling (`darwin`, `linux`, `windows`), from `platform.system()` (#476)",
+        "Resource (on every span)",
+    ),
+    Attr(
         "openinference.project.name",
         "resource",
         "`project_name` / `OTEL_PROJECT_NAME` (the Phoenix project); optional",
@@ -135,7 +147,7 @@ ATTRIBUTES: Tuple[Attr, ...] = (
     Attr(
         "hermes.cron.job_id",
         "session",
-        "Cron job id, `cron` roots only (optional)",
+        "Cron job id, `cron` roots only: from the hook payload, else parsed from the scheduler's `cron_<job id>_<timestamp>` session id (optional)",
         "agent / cron (turn root)",
     ),
     Attr(
@@ -204,6 +216,24 @@ ATTRIBUTES: Tuple[Attr, ...] = (
         "hermes.session.reset_reason",
         "session",
         "Set when a still-open root was closed by `on_session_finalize` / `on_session_reset`, with `hermes.turn.final_status` `finalized` / `reset` (optional)",
+        "agent / cron (turn root)",
+    ),
+    Attr(
+        "hermes.span.ended_by",
+        "turn",
+        "`sweep` when the plugin ended the span on the operation's behalf because the operation's own end hook never came; absent on a normally ended span",
+        "tool.* / api.* / llm.* / approval.* / skill.*",
+    ),
+    Attr(
+        "hermes.span.sweep_reason",
+        "turn",
+        "Why a swept span was ended: `turn_end` (still open at `on_session_end`), `session_end` (at finalize / reset), `turn_failed` (every API attempt of the turn failed and the next turn closed it), `ttl` (the orphan sweep, `root_span_ttl_ms`) or `shutdown`",
+        "tool.* / api.* / llm.* / approval.* / skill.*",
+    ),
+    Attr(
+        "hermes.trace.remote_parent",
+        "session",
+        "`true` when the root was parented under the span an outer process named in `HERMES_OTEL_TRACEPARENT` (#474); absent otherwise",
         "agent / cron (turn root)",
     ),
     Attr(
@@ -318,7 +348,7 @@ ATTRIBUTES: Tuple[Attr, ...] = (
     Attr(
         "hermes.turn.number",
         "turn",
-        "1-based index of the user prompt within the session (per process; `hermes -r` restarts at 1).",
+        "1-based index of the user prompt within the session. A session resumed in a new process (`hermes -r`) continues from the user prompts in its conversation; after a context compaction the count can only stay or grow.",
         "Every span",
     ),
     Attr(
@@ -1006,9 +1036,15 @@ ATTRIBUTES: Tuple[Attr, ...] = (
     ),
     Attr("gen_ai.operation.name", "model", "`invoke_agent`", "agent / cron (turn root)"),
     Attr(
+        "hermes.provider",
+        "model",
+        "The provider id as Hermes names it (`openrouter`, `nvidia`, `xai`, `bedrock` …), beside the convention spellings in `gen_ai.provider.name` / `llm.provider` (#475)",
+        "agent / cron (turn root)",
+    ),
+    Attr(
         "gen_ai.provider.name",
         "model",
-        "The LLM provider the turn's API calls reported (`openrouter`, `anthropic` …), set at **end**; absent when no API call reported one.",
+        "The LLM provider the turn's API calls reported, set at **end**; absent when no API call reported one. the OTel GenAI well-known spelling (`x_ai`, `aws.bedrock`, `gcp.vertex_ai`, `azure.ai.inference` …) when the convention has one for the Hermes id, else the raw id; the raw id is always in `hermes.provider` (#475)",
         "agent / cron (turn root)",
     ),
     Attr(
@@ -1137,7 +1173,7 @@ ATTRIBUTES: Tuple[Attr, ...] = (
     Attr(
         "gen_ai.system",
         "model",
-        "The LLM provider the turn's API calls reported (`openrouter`, `anthropic` …), set at **end**; absent when no API call reported one.",
+        "The LLM provider the turn's API calls reported, set at **end**; absent when no API call reported one. the OTel GenAI well-known spelling (`x_ai`, `aws.bedrock`, `gcp.vertex_ai`, `azure.ai.inference` …) when the convention has one for the Hermes id, else the raw id; the raw id is always in `hermes.provider` (#475)",
         "agent / cron (turn root)",
     ),
     Attr(
@@ -1162,7 +1198,7 @@ ATTRIBUTES: Tuple[Attr, ...] = (
     Attr(
         "llm.provider",
         "model",
-        "The LLM provider the turn's API calls reported (`openrouter`, `anthropic` …), set at **end**; absent when no API call reported one.",
+        "The LLM provider the turn's API calls reported, set at **end**; absent when no API call reported one. OpenInference's spelling (`xai`, `aws`, `google`, `azure`, `moonshot` …) when the convention has one for the Hermes id, else the raw id; the raw id is always in `hermes.provider` (#475)",
         "agent / cron (turn root)",
     ),
     Attr("llm.request.approx_input_tokens", "model", "Request shape as Hermes reports it", "api.*"),

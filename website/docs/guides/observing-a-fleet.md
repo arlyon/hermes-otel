@@ -80,6 +80,17 @@ Board health is metrics, not spans:
 
 **Models in a mixed fleet.** Group by `gen_ai.request.model` on turn roots, or on `subagent.*` spans for delegated children. `hermes.agent.model_override=true` marks every turn not on its profile's `model.default`: a cheap worker profile's `--model`, a cron job's own model, `-m`, `/model`.
 
+### Join an outer trace from any launcher
+
+A CI job, a shell script or another agent that runs `hermes` can make the turn a child of its own span by exporting `HERMES_OTEL_TRACEPARENT` (and, if it has one, `HERMES_OTEL_TRACESTATE`) before the call; the root then carries `hermes.trace.remote_parent=true` and the whole run shows up inside the launcher's trace (#474). The value is the W3C `traceparent` of the launcher's current span, which every OpenTelemetry SDK can print (`trace_id` and `span_id` of the current span context, version `00`, flags `01`):
+
+```bash
+export HERMES_OTEL_TRACEPARENT="00-<32 hex trace id>-<16 hex span id>-01"
+hermes -z "Summarise yesterday's failures"
+```
+
+Export the launcher's own spans to the same backend and the Hermes `agent` root nests under them. A malformed value is reported once and ignored; `remote_parent: false` switches the feature off. This is separate from the kanban hand-off above, which uses plain `TRACEPARENT` and only inside a worker.
+
 ## Run it yourself
 
 `scripts/fleet_demo/run_demo.py` builds a three-profile fleet on a scratch board and reads it back from Jaeger:
@@ -88,7 +99,7 @@ Board health is metrics, not spans:
 3. It checks that every card's run is one trace, and that each worker root names its own profile and model.
 4. It deletes the profiles it created.
 
-The swarm's synthesizer card asks for the `humanizer` skill. In a profile without it, that worker exits before its first turn, and the report says so with the worker's last output. Its run still has claim and spawn in one trace, but no turn to join. For delegation and MoA turns, see the multi-agent scenarios in the [turn batch](/development/turn-batch#multi-agent-scenarios).
+The swarm's synthesizer card asks for the `humanizer` skill. In a profile without it, that worker exits before its first turn, and the report says so with the worker's last output. Its run still has claim and spawn in one trace, but no turn to join. For delegation and MoA turns, see the multi-agent scenarios in the [scenario harness](/development/scenarios#multi-agent-scenarios).
 
 ```bash
 docker compose -f docker-compose/jaeger/docker-compose.yaml up -d

@@ -101,6 +101,12 @@ class PerSession:
     # The most recent API error's ``error.type`` for this session, surfaced on
     # the root span at on_session_end so a failed turn shows *why* it failed.
     last_error_type: str = ""
+    # True while this turn's most recent main-loop API attempt ended in
+    # api_request_error with no successful post_api_request after it. Hermes
+    # fires neither post_llm_call nor on_session_end when every attempt fails
+    # (#467), so finalize and the orphan sweep read this to close the root as
+    # failed instead of finalized / timed_out.
+    last_api_failed: bool = False
     # The LLM provider seen on this session's API calls (e.g. "openrouter").
     # on_session_end only receives the platform (e.g. "cli"), so the real
     # provider is captured here for the agent-level GenAI metric dimensions.
@@ -188,6 +194,23 @@ class PerSession:
             attrs["hermes.turn.auxiliary.cost.status"] = (
                 "included" if statuses == {"included"} else "unknown"
             )
+        return attrs
+
+    def api_failure_close(self) -> Optional[Dict[str, Any]]:
+        """Root attributes for a turn closed by finalize or the sweep whose
+        last main-loop API attempt failed (#467), or None when it did not.
+
+        Hermes returns from that path without post_llm_call or on_session_end,
+        so this is the only place the turn can be recorded as failed.
+        """
+        if not self.last_api_failed:
+            return None
+        attrs: Dict[str, Any] = {
+            "hermes.turn.final_status": "failed",
+            "hermes.session.failed": True,
+        }
+        if self.last_error_type:
+            attrs["error.type"] = self.last_error_type
         return attrs
 
     def cost_rollup(self) -> Dict[str, Any]:
@@ -310,6 +333,10 @@ class SessionState:
         # Gateway session key -> the session id of its latest turn, so
         # agent_loop_stopped (which names only the key) finds the turn (#396).
         self._session_keys: "OrderedDict[str, str]" = OrderedDict()
+        # Session ids whose root span this process has already counted in
+        # ``hermes.session.count`` (#473): outlives the per-turn PerSession so
+        # continuation turns (synthesised roots) count nothing.
+        self._counted: "OrderedDict[str, bool]" = OrderedDict()
 
     def remember_session_key(self, session_key: str, session_id: str) -> None:
         with self._lock:
@@ -368,20 +395,22 @@ class SessionState:
 
     # ── Turn numbering ───────────────────────────────────────────────────
 
-    def next_turn(self, session_id: str, reset: bool = False) -> int:
+    def next_turn(self, session_id: str, reset: bool = False, history_turns: int = 0) -> int:
         """Advance and return the 1-based turn number for ``session_id``.
 
         Called once per user turn (from ``pre_llm_call``, which Hermes fires
         once per prompt, before the tool loop). ``reset=True`` (Hermes's
         ``is_first_turn``) restarts the count at 1 so a reused session id
-        starts fresh. The counter is process-local: a session resumed in a
-        new process (``hermes -r``) restarts at 1.
+        starts fresh. The counter is process-local, so ``history_turns`` (the
+        user prompts in the turn's conversation, current one included) is a
+        floor: a session resumed in a new process (``hermes -r``) continues
+        its numbering instead of restarting at 1.
         """
         if not session_id:
             return 0
         with self._lock:
             current = 0 if reset else self._turn_counters.get(session_id, 0)
-            turn = current + 1
+            turn = 1 if reset else max(current + 1, int(history_turns or 0))
             self._turn_counters[session_id] = turn
             self._turn_counters.move_to_end(session_id)
             while len(self._turn_counters) > self._MAX_TURN_COUNTERS:
@@ -398,6 +427,24 @@ class SessionState:
         table.move_to_end(session_id)
         while len(table) > self._MAX_TURN_COUNTERS:
             table.popitem(last=False)
+
+    def first_root(self, session_id: str) -> bool:
+        """True once per session id per process: the caller counts the session.
+
+        A real ``on_session_start`` and a root synthesised on ``pre_llm_call``
+        (resumed, gateway and cron turns, where Hermes never fires
+        ``on_session_start`` in this process) both create a root; whichever
+        comes first wins and every later root of the same session is a
+        continuation turn (#473). ``drop_session`` forgets the id, so a
+        session that is finalized and then reused counts again.
+        """
+        if not session_id:
+            return False
+        with self._lock:
+            if session_id in self._counted:
+                return False
+            self._remember(self._counted, session_id, True)
+            return True
 
     def first_seen(self, session_id: str) -> Optional[float]:
         """Wall-clock time the session's first turn started, if seen in this process."""
@@ -440,6 +487,7 @@ class SessionState:
                 turns = max(turns, ps.turn_number)
             first_seen = self._first_seen.pop(session_id, None)
             self._previous_session.pop(session_id, None)
+            self._counted.pop(session_id, None)
             return {"turns": turns, "first_seen": first_seen, "had_state": ps is not None}
 
     def turn_number(self, session_id: str) -> int:

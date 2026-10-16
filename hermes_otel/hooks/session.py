@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from .. import log_events as EV
 from ..debug_utils import debug_log, logger
-from ..helpers import detect_session_kind, truncate_string
+from ..helpers import cron_job_id_from_session, detect_session_kind, truncate_string
 from ._common import _emit_event, _fail_open, get_tracer
 from .attributes import (
     _extract_correlation_id,
@@ -26,6 +26,7 @@ from .attributes import (
     turn_trigger_attributes,
 )
 from .kanban import kanban_remote_parent
+from .propagation import remote_parent
 from .usage import _record_genai_token_usage, genai_metric_dims, usage_attributes
 
 try:
@@ -76,6 +77,11 @@ def _start_session_span(
         tracer.sessions.remember_session_key(gateway_key, session_id)
     if not ps.correlation_id:
         ps.correlation_id = _extract_correlation_id(extra_kwargs)
+    # Count the session when this process first roots it, whichever hook
+    # gets there first (#473): a resumed, gateway or cron session has no
+    # on_session_start in this process and used to go uncounted.
+    if tracer.sessions.first_root(session_id):
+        tracer.record_metric("session_count", 1, {"platform": platform or "unknown"})
 
     attributes: Dict[str, Any] = {"hermes.session.kind": kind}
     attributes.update(_session_identity_attributes(session_id, root=True))
@@ -94,7 +100,11 @@ def _start_session_span(
     if synthesized:
         attributes["hermes.session.synthesized"] = True
 
-    cron_job_id = extra_kwargs.get("job_id") or extra_kwargs.get("cron_job_id")
+    cron_job_id = (
+        extra_kwargs.get("job_id")
+        or extra_kwargs.get("cron_job_id")
+        or cron_job_id_from_session(session_id)
+    )
     if cron_job_id:
         attributes["hermes.cron.job_id"] = truncate_string(cron_job_id, 200)
 
@@ -131,6 +141,11 @@ def _start_session_span(
     # before spawning this process, so the run is one trace.
     if parent_override is None and not links:
         parent_override = kanban_remote_parent()
+    # Any other launcher (#474): HERMES_OTEL_TRACEPARENT names the outer span.
+    if parent_override is None and not links and tracer.config.remote_parent:
+        parent_override = remote_parent()
+        if parent_override is not None:
+            attributes["hermes.trace.remote_parent"] = True
 
     # Session chaining (#29): a session that replaced another (``/new``,
     # ``/reset``, expiry) names it and links to its last root span.
@@ -166,7 +181,9 @@ def on_session_start(session_id: str, model: str, platform: str, **kwargs):
         return
 
     tracer.sweep_expired_turns()
-    tracer.record_metric("session_count", 1, {"platform": platform or "unknown"})
+    if session_id:
+        # A previous turn of this session that failed and never ended (#467).
+        tracer.close_failed_turn(session_id)
     _start_session_span(session_id, model, platform, kwargs, synthesized=False)
 
 
@@ -306,6 +323,10 @@ def on_session_end(
         span=root_span,
         content=False,
     )
+    # Children the turn left open (a tool without post_tool_call, an api.*
+    # cut mid-stream, an approval that timed out) end here, marked, before
+    # the root so the root still contains them (#477).
+    tracer.end_leftover_children(session_id, "turn_end")
     _remember_root(tracer, session_id)
     tracer.spans.pop_parent(session_id=session_id)
     tracer.end_span(key, attributes=attributes, status=status)
@@ -358,6 +379,7 @@ def _finalize_session(tracer, session_id: str, platform: str, reason: str, *, ev
     key = f"session:{session_id}"
     closed_root = tracer.spans.has_span(key)
     if closed_root:
+        tracer.end_leftover_children(session_id, "session_end")
         # A turn still in flight (or an orphan) at the session's end: close it
         # as finalized rather than leaving it to the TTL sweep.
         if tracer.config.skill_spans:
@@ -365,16 +387,22 @@ def _finalize_session(tracer, session_id: str, platform: str, reason: str, *, ev
                 tracer.end_span(
                     skill_key, attributes={"hermes.skill.result_status": event}, status="ok"
                 )
+        attributes = {
+            _REASON_KEY[event]: truncate_string(reason, 120),
+            "hermes.turn.final_status": _FINAL_STATUS[event],
+        }
+        status, error_message = "ok", None
+        # Every API attempt of this turn failed and Hermes skipped
+        # on_session_end (#467): the turn failed, it was not just finalized.
+        ps = tracer.sessions.peek(session_id)
+        failure = ps.api_failure_close() if ps is not None else None
+        if failure:
+            attributes.update(failure)
+            status = "error"
+            error_message = f"turn failed: {failure.get('error.type') or 'API request failed'}"
         _remember_root(tracer, session_id)
         tracer.spans.pop_parent(session_id=session_id)
-        tracer.end_span(
-            key,
-            attributes={
-                _REASON_KEY[event]: truncate_string(reason, 120),
-                "hermes.turn.final_status": _FINAL_STATUS[event],
-            },
-            status="ok",
-        )
+        tracer.end_span(key, attributes=attributes, status=status, error_message=error_message)
 
     known = tracer.sessions.drop_session(session_id)
     tracer.spans.drop_session(session_id)

@@ -6,11 +6,12 @@ the OpenTelemetry SDK dependency tree.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import os
 import re
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 
 # Matches:
 #   ESC [ ... letter             → CSI sequences (colors, cursor)
@@ -570,6 +571,16 @@ def optional_number(value: Any) -> Optional[float]:
         return None
 
 
+def count_user_turns(conversation: Any) -> int:
+    """User prompts in a conversation (``role == "user"`` messages), or 0 when
+    it is not a list. Hermes passes the turn's whole conversation, current
+    prompt included, to ``pre_llm_call``; after a context compaction it holds
+    fewer, so callers treat the count as a floor."""
+    if not isinstance(conversation, (list, tuple)):
+        return 0
+    return sum(1 for m in conversation if isinstance(m, dict) and m.get("role") == "user")
+
+
 def detect_session_kind(platform: Any, kwargs: Dict[str, Any]) -> str:
     """Classify a run as ``session``, ``cron`` or a host-supplied kind.
 
@@ -587,6 +598,17 @@ def detect_session_kind(platform: Any, kwargs: Dict[str, Any]) -> str:
     if kwargs.get("job_id") or kwargs.get("cron_job_id"):
         return "cron"
     return "session"
+
+
+# Hermes's scheduler names a cron run's session ``cron_<job id>_<YYYYmmdd>_<HHMMSS>``
+# (cron/scheduler.py) and passes no job id on on_session_start.
+_CRON_SESSION_RE = re.compile(r"^cron_(?P<job>.+)_\d{8}_\d{6}$")
+
+
+def cron_job_id_from_session(session_id: Any) -> str:
+    """The cron job id embedded in a cron run's session id, or ``""``."""
+    m = _CRON_SESSION_RE.match(str(session_id or ""))
+    return m.group("job") if m else ""
 
 
 def parse_traceparent(value: Any) -> Optional[Tuple[int, int, int]]:
@@ -878,3 +900,75 @@ def auxiliary_task_name(aux_task: Any) -> str:
 def query_source_for(is_subagent: Any) -> str:
     """``main`` or ``subagent`` for a main-loop API call."""
     return QUERY_SOURCE_SUBAGENT if is_subagent else QUERY_SOURCE_MAIN
+
+
+# The OTLP exporters read these when constructed without headers (``headers or
+# parse_env_headers(...)``). The plugin's config file is the single source of
+# headers (#472), so they are hidden while exporters are built.
+OTLP_HEADER_ENV_VARS: Tuple[str, ...] = (
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+)
+
+
+@contextlib.contextmanager
+def without_otlp_header_env() -> Iterator[None]:
+    """Hide the ``OTEL_EXPORTER_OTLP_*HEADERS`` variables while exporters are built.
+
+    A backend entry without ``headers:`` is constructed with ``headers=None``
+    and the SDK then falls back to the environment, so a token exported for
+    some other tool (Honeycomb, Grafana Cloud, Logfire …) would be sent to
+    every credential-less backend in the file (#472). The variables are
+    restored on exit, also when construction raises; nothing else in the
+    environment is touched.
+    """
+    saved = {name: os.environ.pop(name) for name in OTLP_HEADER_ENV_VARS if name in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+# ``platform.machine()`` spellings -> the OTel ``host.arch`` well-known value
+# (``HostArchValues``). Unknown machines pass through lower-cased.
+_HOST_ARCH = {
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "arm64": "arm64",
+    "aarch64": "arm64",
+    "i386": "x86",
+    "i486": "x86",
+    "i586": "x86",
+    "i686": "x86",
+    "x86": "x86",
+    "armv6l": "arm32",
+    "armv7l": "arm32",
+    "armv8l": "arm32",
+    "arm": "arm32",
+    "ppc64": "ppc64",
+    "ppc64le": "ppc64",
+    "ppc": "ppc32",
+    "s390x": "s390x",
+    "ia64": "ia64",
+}
+
+
+def os_type(system: Optional[str] = None) -> str:
+    """The OTel ``os.type`` for this host (``darwin`` / ``linux`` / ``windows`` …),
+    from ``platform.system()``; empty when unknown (#476)."""
+    import platform
+
+    text = (system if system is not None else platform.system()).strip().lower()
+    return text
+
+
+def host_arch(machine: Optional[str] = None) -> str:
+    """The OTel ``host.arch`` for this host (``arm64`` / ``amd64`` / ``x86`` …),
+    from ``platform.machine()``; the raw spelling, lower-cased, when the
+    conventions name nothing for it; empty when unknown (#476)."""
+    import platform
+
+    text = (machine if machine is not None else platform.machine()).strip().lower()
+    return _HOST_ARCH.get(text, text)

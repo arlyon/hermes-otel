@@ -33,7 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .backends import _ResolvedBackend
 from .debug_utils import debug_log, logger
-from .helpers import derive_signal_endpoint
+from .helpers import derive_signal_endpoint, without_otlp_header_env
 from .otlp_transport import create_exporter, signal_endpoint
 from .plugin_config import DEFAULT_LOG_EXCLUDE_LOGGERS, HermesOtelConfig
 from .redaction import redact_attributes, redact_text
@@ -752,12 +752,11 @@ def build_log_processors(
         merged.update((b.logs_headers if b.logs_headers is not None else b.headers) or {})
         endpoint = signal_endpoint(b, "logs")
         try:
-            exporter = _LoggingLogExporter(
-                create_exporter(
+            with without_otlp_header_env():
+                log_exporter = create_exporter(
                     b, "logs", OTLPLogExporter, endpoint=endpoint, headers=merged or None
-                ),
-                b.display_name,
-            )
+                )
+            exporter = _LoggingLogExporter(log_exporter, b.display_name)
             processor: Any = BatchLogRecordProcessor(
                 exporter,
                 schedule_delay_millis=batch.get("schedule_delay_ms"),

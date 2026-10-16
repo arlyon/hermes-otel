@@ -469,6 +469,16 @@ KNOWN_ENV_VARS: Tuple[Tuple[str, str, str], ...] = (
         "Write the plugin's hook-by-hook debug log to `$HERMES_HOME/plugins/hermes_otel/debug.log`",
     ),
     (
+        "HERMES_OTEL_TRACEPARENT",
+        "plugin",
+        "W3C traceparent of an outer span to parent every turn root under (#474); ignored with `remote_parent: false`",
+    ),
+    (
+        "HERMES_OTEL_TRACESTATE",
+        "plugin",
+        "W3C tracestate carried with `HERMES_OTEL_TRACEPARENT`",
+    ),
+    (
         "HERMES_OTEL_LIVE_DB",
         "plugin",
         "Path of the live store SQLite file (default `$HERMES_HOME/hermes_otel_live.db`)",
@@ -491,7 +501,11 @@ KNOWN_ENV_VARS: Tuple[Tuple[str, str, str], ...] = (
         "OTel SDK: default OTLP endpoint for exporters created without one",
     ),
     ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "otel", "OTel SDK: traces endpoint override"),
-    ("OTEL_EXPORTER_OTLP_HEADERS", "otel", "OTel SDK: headers added to every OTLP request"),
+    (
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "otel",
+        "Ignored (#472): headers come from the config file only, so a token set here never reaches a credential-less backend",
+    ),
     ("OTEL_SERVICE_NAME", "otel", "OTel SDK: `service.name` resource attribute"),
     ("OTEL_RESOURCE_ATTRIBUTES", "otel", "OTel SDK: extra resource attributes, `k=v,k2=v2`"),
     ("OTEL_SDK_DISABLED", "otel", "OTel SDK: `true` turns every exporter into a no-op"),

@@ -64,7 +64,7 @@ from .pipeline import (  # noqa: F401 — re-exported
 )
 from .plugin_config import HermesOtelConfig, load_config
 from .session_state import SessionState
-from .span_tracker import SpanTracker
+from .span_tracker import SpanTracker, sweep_attributes
 
 try:
     from opentelemetry.trace import INVALID_SPAN, set_span_in_context
@@ -180,6 +180,10 @@ class HermesOTelPlugin:
 
     def _reset_pipeline_state(self) -> None:
         """Forget every pipeline object from a previous init (not the config)."""
+        # Reachability probe results (#481): filled by a background thread
+        # shortly after init; [] until then or when the probe is off.
+        self.probe_results = []
+        self._probe_thread = None
         self.tracer = None
         self._tracer_provider = None
         self._span_processors = []
@@ -204,7 +208,7 @@ class HermesOTelPlugin:
         # flush, then stop the workers.
         debug_log(f"shutdown: begin (flush pending={self._flush_pending.is_set()})")
         try:
-            self.spans.end_all()
+            self.spans.end_all(attributes=sweep_attributes("shutdown"))
         except Exception:
             pass
         try:
@@ -655,7 +659,50 @@ class HermesOTelPlugin:
             )
         return expired
 
-    def _finalize_orphan(self, session_id: str) -> None:
+    def close_failed_turn(self, session_id: str) -> bool:
+        """Close a turn left open because every API attempt failed (#467).
+
+        Hermes fires neither post_llm_call nor on_session_end on that path, so
+        in a gateway the session's next message would otherwise land in the
+        failed turn's trace. Called from pre_llm_call; returns True when a
+        stale failed turn was closed (as failed, with its open children).
+        """
+        ps = self.sessions.peek(session_id)
+        if ps is None or not ps.last_api_failed:
+            return False
+        if not self.spans.has_span(f"session:{session_id}"):
+            return False
+        self._finalize_orphan(session_id, reason="turn_failed")
+        self.unregister_turn(session_id)
+        return True
+
+    def end_leftover_children(self, session_id: str, reason: str) -> int:
+        """End every child span still open under ``session_id`` and say why (#477).
+
+        A tool whose ``post_tool_call`` never fired, an ``api.*`` span cut by a
+        stream abort or an approval that timed out used to stay open past
+        the turn's end: never exported until shutdown, and exported with no
+        trace of what happened. Each one is ended with status OK (a sweep is
+        not an error of the operation) and ``hermes.span.ended_by=sweep`` +
+        ``hermes.span.sweep_reason=<reason>``, and counted in
+        ``hermes.span.swept.count``. Ends children before the root so the
+        root still contains them. Returns how many were ended.
+        """
+        session_key = f"session:{session_id}"
+        swept = 0
+        for key in self.spans.pop_session_keys(session_id):
+            if key == session_key or not self.spans.has_span(key):
+                continue
+            self.end_span(key, attributes=sweep_attributes(reason), status="ok")
+            self.record_metric(
+                "span_swept", 1, {"span_kind": key.split(":", 1)[0], "reason": reason}
+            )
+            swept += 1
+        if swept:
+            debug_log(f"swept {swept} leftover span(s) of session={session_id}: {reason}")
+        return swept
+
+    def _finalize_orphan(self, session_id: str, reason: str = "ttl") -> None:
         """End any still-active spans for a timed-out session.
 
         Marks the session span (if present) with `hermes.turn.final_status=timed_out`
@@ -664,20 +711,30 @@ class HermesOTelPlugin:
         # End non-session active spans first (api.*, tool.*, llm.*) so the
         # session span ends last and contains them in the hierarchy.
         session_key = f"session:{session_id}"
-        keys = self.spans.pop_session_keys(session_id)
-        for key in [k for k in keys if k != session_key]:
-            self.end_span(key, status="ok")
+        self.end_leftover_children(session_id, reason)
 
         if self.spans.has_span(session_key):
             # A turn the gateway stopped (agent_loop_stopped) whose end never
             # arrived is interrupted, not timed out (#396).
             ps = self.sessions.peek(session_id)
             stopped = ps is not None and bool(ps.stop_reason)
-            self.end_span(
-                session_key,
-                attributes={"hermes.turn.final_status": "interrupted" if stopped else "timed_out"},
-                status="ok",
-            )
+            failure = ps.api_failure_close() if ps is not None and not stopped else None
+            if failure:
+                # Every API attempt failed and on_session_end never came (#467).
+                self.end_span(
+                    session_key,
+                    attributes=failure,
+                    status="error",
+                    error_message=f"turn failed: {failure.get('error.type') or 'API request failed'}",
+                )
+            else:
+                self.end_span(
+                    session_key,
+                    attributes={
+                        "hermes.turn.final_status": "interrupted" if stopped else "timed_out"
+                    },
+                    status="ok",
+                )
         # Drop the expired session's parent stack, skill spans, delegation
         # record and aggregator — the sweep is a safety net and later hooks
         # rebuild state. The ContextVar stack is deliberately untouched: it
